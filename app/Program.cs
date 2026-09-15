@@ -1,7 +1,11 @@
+using System.Threading.RateLimiting;
 using Azure.Core;
 using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using OpenTelemetry.Trace;
 using TicketsDashboard;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,6 +21,34 @@ builder.Services.AddOptions<IdentityOptions>()
     .Validate(options => !options.UseDeveloperCredential || builder.Environment.IsDevelopment(),
         "Developer credentials are permitted only in a local Development environment.")
     .ValidateOnStart();
+
+// Telemetry only when Application Insights is configured, so local runs stay quiet.
+var telemetryConnection = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+if (!string.IsNullOrWhiteSpace(telemetryConnection))
+{
+    builder.Services.AddOpenTelemetry()
+        .UseAzureMonitor(options => options.ConnectionString = telemetryConnection)
+        .WithTracing(tracing => tracing.AddNpgsql());
+}
+
+// Returns RFC 7807 responses; in Production this deliberately omits exception detail.
+builder.Services.AddProblemDetails();
+
+builder.Services.AddRateLimiter(limiter =>
+{
+    limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    limiter.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            // Per signed-in user. EasyAuth sets this header upstream and strips any client-supplied copy.
+            context.Request.Headers["X-MS-CLIENT-PRINCIPAL-NAME"].FirstOrDefault()
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "anonymous",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 120,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+});
 
 builder.Services.AddSingleton<TokenCredential>(services =>
 {
@@ -38,13 +70,15 @@ builder.Services.AddHttpClient<LakebaseCredentialProvider>((services, client) =>
 {
     client.BaseAddress = new Uri(services.GetRequiredService<IOptions<LakebaseOptions>>().Value.WorkspaceUrl);
     client.Timeout = TimeSpan.FromSeconds(30);
-});
+}).AddStandardResilienceHandler();
 
 builder.Services.AddSingleton(LakebaseDataSourceFactory.Create);
 builder.Services.AddScoped<TicketRepository>();
 builder.Services.AddHostedService<ConnectionWarmup>();
 
 var app = builder.Build();
+
+app.UseExceptionHandler();
 
 app.Use(async (context, next) =>
 {
@@ -57,6 +91,7 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 

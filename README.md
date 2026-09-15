@@ -42,7 +42,12 @@ Lakebase enforces two independent layers. Both are required; either alone fails.
 | Layer | Grants | Where |
 | --- | --- | --- |
 | Workspace | Service principal with `workspace-access`, `CAN_USE` on the project | Databricks SCIM + project ACL |
-| Database | Postgres role + `SELECT` | `setup/lakebase-role.sql` |
+| Database | Postgres role + **column-level** `SELECT` on seven columns | `setup/lakebase-role.sql` |
+
+The grant is column-level on purpose. A table-wide `GRANT SELECT` also exposes
+`call_transcript`, `compliance_data_leak` and lat/long, none of which the
+dashboard reads. `COUNT(*)` still works, because Postgres permits it with SELECT
+on any one column.
 
 The Postgres role name is the managed identity's **client ID**, and it is
 case-sensitive. The identity is referenced (not created) by the Bicep template,
@@ -86,16 +91,18 @@ the Postgres connection.
 ## Deploy
 
 ```bash
-az acr build --registry ticketsacrjuimgm6jl3a66 --image tickets-dashboard:v1 ./app
+az acr build --registry ticketsacrjuimgm6jl3a66 --image tickets-dashboard:v2 ./app
 
-az deployment group create -g tickets-dashboard-rg --template-file infra/main.bicep \
-  --parameters authClientId=23b870db-bb0b-433e-822c-71fe161819a6 \
-               authClientSecret=<secret> \
-               containerImage=ticketsacrjuimgm6jl3a66.azurecr.io/tickets-dashboard:v1
+$env:AUTH_CLIENT_SECRET = "<secret>"
+az deployment group create -g tickets-dashboard-rg --parameters infra/demo.bicepparam
 ```
 
-`az acr build` compiles in Azure, so Docker is not needed locally. Always pass
-`containerImage`: it defaults to a placeholder, and omitting it rolls the app back.
+`az acr build` compiles in Azure, so Docker is not needed locally. The parameter
+file pins the image **by digest**, not by tag: tags are mutable, so a rebuild
+would otherwise silently change what runs. Update the digest on each release.
+
+The client secret is read from the environment via `readEnvironmentVariable`, so
+it is never committed. `infra/prod.bicepparam` shows the production shape.
 
 After the first deployment, set the auth app registration's redirect URI to the
 template's `redirectUri` output, or sign-in fails.
@@ -124,6 +131,29 @@ configured.
 first request fail with `Authentication timed out`, because the token exchange
 ran mid-handshake and Postgres cut it off. `ConnectionWarmup` opens one
 connection before traffic arrives.
+
+## Operational behaviour
+
+| Concern | Handling |
+| --- | --- |
+| Telemetry | OpenTelemetry to Application Insights, including Npgsql spans. Disabled when no connection string is set, so local runs stay quiet. |
+| Errors | `UseExceptionHandler` with ProblemDetails; no exception detail leaves the process in Production. |
+| Rate limiting | Fixed window, 120 requests/minute, partitioned per signed-in user. |
+| Credential refresh | Every 45 minutes against a 60-minute lifetime. |
+| Transient failures | Standard resilience handler on the credential call; up to 3 connection attempts, since Lakebase resume can fail the first one. |
+
+## Known gaps
+
+Not production-ready without these, and they are deliberately not faked:
+
+- **No private networking.** Ingress is public and traffic to Lakebase leaves
+  over the internet, TLS-protected but not private. Requires VNet integration,
+  private endpoints, and Container Registry Premium.
+- **Auth secret is not in Key Vault.** Attempted; Key Vault in this subscription
+  is forced to `publicNetworkAccess: Disabled`, so neither an operator nor the
+  non-VNet Container App can reach it. Blocked on the networking item above.
+- **Single zone.** `zoneRedundant` needs a VNet-integrated environment, which
+  cannot be converted in place.
 
 ## Costs
 

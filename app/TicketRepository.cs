@@ -42,7 +42,7 @@ public sealed class TicketRepository(NpgsqlDataSource dataSource, Microsoft.Exte
 
     public async Task<DashboardData> GetDashboardAsync(TicketFilter filter, CancellationToken cancellation)
     {
-        await using var connection = await dataSource.OpenConnectionAsync(cancellation);
+        await using var connection = await OpenAsync(cancellation);
         await using var batch = new NpgsqlBatch(connection);
 
         batch.BatchCommands.Add(Command($"""
@@ -105,13 +105,33 @@ public sealed class TicketRepository(NpgsqlDataSource dataSource, Microsoft.Exte
 
     public async Task<(DateOnly Min, DateOnly Max)?> GetDataRangeAsync(CancellationToken cancellation)
     {
-        await using var connection = await dataSource.OpenConnectionAsync(cancellation);
+        await using var connection = await OpenAsync(cancellation);
         await using var command = new NpgsqlCommand(
             $"SELECT MIN(created_time)::date, MAX(created_time)::date FROM {_table}", connection);
         await using var reader = await command.ExecuteReaderAsync(cancellation);
 
         if (!await reader.ReadAsync(cancellation) || await reader.IsDBNullAsync(0)) return null;
         return (DateOnly.FromDateTime(reader.GetDateTime(0)), DateOnly.FromDateTime(reader.GetDateTime(1)));
+    }
+
+    /// <summary>
+    /// Lakebase suspends after inactivity, and the first connection while it resumes can fail.
+    /// Databricks documents retry as the caller's responsibility.
+    /// </summary>
+    private async Task<NpgsqlConnection> OpenAsync(CancellationToken cancellation)
+    {
+        const int MaxAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await dataSource.OpenConnectionAsync(cancellation);
+            }
+            catch (NpgsqlException) when (attempt < MaxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt * 2), cancellation);
+            }
+        }
     }
 
     private static async Task<List<Slice>> ReadSlices(NpgsqlDataReader reader, CancellationToken cancellation)

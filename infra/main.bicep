@@ -33,6 +33,21 @@ param identityName string = 'tickets-id'
 @description('Resource group holding that identity.')
 param identityResourceGroup string = 'tickets-dashboard-rg'
 
+@description('Tags applied to every resource, for cost attribution and governance.')
+param tags object = {
+  workload: 'tickets-dashboard'
+  environment: 'demo'
+  dataClassification: 'confidential'
+  managedBy: 'bicep'
+}
+
+@description('''
+Zone redundancy cannot be turned on for an existing environment: it needs a
+VNet-integrated environment, so changing this recreates the environment and
+changes the ingress FQDN, which then requires updating the auth redirect URI.
+''')
+param zoneRedundant bool = false
+
 var suffix = uniqueString(resourceGroup().id, namePrefix)
 var registryName = toLower('${namePrefix}acr${suffix}')
 
@@ -46,6 +61,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: registryName
   location: location
+  tags: tags
   sku: {
     name: 'Basic'
   }
@@ -70,6 +86,7 @@ resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${namePrefix}-logs'
   location: location
+  tags: tags
   properties: {
     sku: {
       name: 'PerGB2018'
@@ -78,10 +95,23 @@ resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+resource insights 'Microsoft.Insights/components@2020-02-02' = {
+  name: '${namePrefix}-insights'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logs.id
+  }
+}
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${namePrefix}-env'
   location: location
+  tags: tags
   properties: {
+    zoneRedundant: zoneRedundant
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
@@ -95,6 +125,7 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: '${namePrefix}-dashboard'
   location: location
+  tags: tags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -145,6 +176,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'Lakebase__Role', value: identity.properties.clientId }
             { name: 'Identity__ManagedIdentityClientId', value: identity.properties.clientId }
             { name: 'Identity__UseDeveloperCredential', value: 'false' }
+            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
           ]
           probes: [
             {
