@@ -1,0 +1,11 @@
+bin/
+obj/
+.vs/
+.vscode/*.local.json
+TestResults/
+*.zip
+*.user
+
+# Developer-specific: contains your own Postgres role and tenant ID.
+# Copy appsettings.Development.json.example and fill in your values.
+app/appsettings.Development.json

@@ -1,0 +1,9 @@
+{
+  "Lakebase": {
+    "Role": "you@example.onmicrosoft.com"
+  },
+  "Identity": {
+    "UseDeveloperCredential": true,
+    "TenantId": "00000000-0000-0000-0000-000000000000"
+  }
+}

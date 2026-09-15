@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Support Tickets &middot; Lakebase</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:," />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Support Tickets</h1>
+      <p class="sub">Live from Databricks Lakebase &middot; <code id="source">lb_tickets_clean</code></p>
+    </div>
+    <div class="who" id="who"></div>
+  </header>
+
+  <form id="filters" autocomplete="off">
+    <label>From <input type="date" id="from" required /></label>
+    <label>To <input type="date" id="to" required /></label>
+    <label>Region
+      <select id="region">
+        <option value="">All</option>
+        <option>EMEA</option>
+        <option>APAC</option>
+        <option>AMER</option>
+      </select>
+    </label>
+    <label>Priority
+      <select id="priority">
+        <option value="">All</option>
+        <option>High</option>
+        <option>Medium</option>
+        <option>Low</option>
+      </select>
+    </label>
+    <button type="submit" id="apply">Apply</button>
+    <span class="timing" id="timing"></span>
+  </form>
+
+  <div id="error" class="error" hidden></div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="panel">
+    <h2>Tickets per day</h2>
+    <div id="daily" class="chart"></div>
+  </section>
+
+  <div class="row">
+    <section class="panel">
+      <h2>By region</h2>
+      <div id="byRegion" class="bars"></div>
+    </section>
+    <section class="panel">
+      <h2>By priority</h2>
+      <div id="byPriority" class="bars"></div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
